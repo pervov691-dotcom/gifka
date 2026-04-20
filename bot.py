@@ -167,7 +167,6 @@ def get_random_gif(query=None):
     if query:
         gifs = search_gif(query, limit=20)
         return random.choice(gifs) if gifs else None
-    # Случайные популярные запросы
     random_queries = ["funny", "cute", "awesome", "cool", "happy", "love", "cat", "dog"]
     gifs = search_gif(random.choice(random_queries), limit=20)
     return random.choice(gifs) if gifs else None
@@ -258,9 +257,9 @@ def admin_keyboard():
 
 def texts_edit_keyboard():
     keyboard = [
-        [InlineKeyboardButton("📝 Приветствие", callback_data="edit_welcome"), InlineKeyboardButton("🏠 Главное меню", callback_data="edit_main_menu")],
-        [InlineKeyboardButton("📖 Помощь", callback_data="edit_help"), InlineKeyboardButton("🔍 Поиск", callback_data="edit_search")],
-        [InlineKeyboardButton("🔒 Подписка", callback_data="edit_subscribe"), InlineKeyboardButton("🎁 Бонус", callback_data="edit_bonus")],
+        [InlineKeyboardButton("📝 Приветствие", callback_data="edit_welcome"), InlineKeyboardButton("🏠 Главное меню", callback_data="edit_main_menu_text")],
+        [InlineKeyboardButton("📖 Помощь", callback_data="edit_help_text"), InlineKeyboardButton("🔍 Поиск", callback_data="edit_search_prompt")],
+        [InlineKeyboardButton("🔒 Подписка", callback_data="edit_subscribe_prompt"), InlineKeyboardButton("🎁 Бонус", callback_data="edit_daily_bonus_text")],
         [InlineKeyboardButton("🔙 Назад", callback_data="admin")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -301,7 +300,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     name = update.effective_user.first_name or "друг"
     
-    # Реферальная система
     args = context.args
     if args and args[0].isdigit() and int(args[0]) != user_id:
         referrer = int(args[0])
@@ -334,7 +332,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data[user_id] = {"requests": 0}
     user_data[user_id]["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Ежедневный бонус
     bonus_claimed, bonus = await check_daily_bonus(user_id)
     if bonus_claimed:
         await update.message.reply_text(texts['daily_bonus_text'].format(bonus=bonus))
@@ -350,7 +347,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_sub:
         user_data[user_id]["requests"] += 1
     
-    # Сохраняем историю
     user_history[user_id].insert(0, query)
     user_history[user_id] = user_history[user_id][:10]
     user_stats[query] += 1
@@ -377,8 +373,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     await query.answer()
     
+    # ========== ГЛАВНОЕ МЕНЮ (ИСПРАВЛЕНО) ==========
     if data == "menu":
-        await query.edit_message_text(texts['main_menu_text'], reply_markup=main_keyboard(user_id))
+        try:
+            # Пытаемся отредактировать текущее сообщение
+            await query.edit_message_text(texts['main_menu_text'], reply_markup=main_keyboard(user_id))
+        except:
+            # Если не получилось (гифка, фото, видео), удаляем старое и шлём новое
+            try:
+                await query.delete_message()
+                await query.message.reply_text(texts['main_menu_text'], reply_markup=main_keyboard(user_id))
+            except:
+                # Если и удалить не вышло, просто шлём новое
+                await query.message.reply_text(texts['main_menu_text'], reply_markup=main_keyboard(user_id))
         return
     
     if data == "search":
@@ -433,9 +440,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "top_users":
         top = sorted(user_data.items(), key=lambda x: x[1].get("requests", 0), reverse=True)[:10]
         text = "🏆 **Топ пользователей:**\n\n"
-        for i, (uid, data) in enumerate(top, 1):
-            name = data.get("name", str(uid))[:20]
-            requests = data.get("requests", 0)
+        for i, (uid, data_user) in enumerate(top, 1):
+            name = data_user.get("name", str(uid))[:20]
+            requests = data_user.get("requests", 0)
             text += f"{i}. {name} — {requests} запросов\n"
         await query.edit_message_text(text, parse_mode='Markdown', reply_markup=main_keyboard(user_id))
         return
@@ -486,6 +493,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(texts['not_found'].format(query=original_query), reply_markup=main_keyboard(user_id))
         return
     
+    # ========== АДМИНКА ==========
     if data == "admin":
         if user_id not in ADMIN_IDS:
             await query.answer("⛔ Доступ запрещён", show_alert=True)
