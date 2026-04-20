@@ -25,7 +25,7 @@ user_stats = defaultdict(int)
 daily_stats = defaultdict(int)
 last_gifs = {}
 popular_cache = {}
-user_history = defaultdict(list)
+user_history = defaultdict(list)  # default dict - автоматически создаёт список
 user_favorites = defaultdict(list)
 user_daily = {}
 user_referrals = defaultdict(int)
@@ -51,19 +51,23 @@ def load_all_data():
     except: user_data = {}
     try:
         with open(FILES['user_stats'], 'r', encoding='utf-8') as f:
-            user_stats = defaultdict(int, json.load(f))
+            loaded = json.load(f)
+            user_stats = defaultdict(int, loaded)
     except: user_stats = defaultdict(int)
     try:
         with open(FILES['daily_stats'], 'r', encoding='utf-8') as f:
-            daily_stats = defaultdict(int, json.load(f))
+            loaded = json.load(f)
+            daily_stats = defaultdict(int, loaded)
     except: daily_stats = defaultdict(int)
     try:
         with open(FILES['user_favorites'], 'r', encoding='utf-8') as f:
-            user_favorites = {int(k): v for k, v in json.load(f).items()}
+            loaded = json.load(f)
+            user_favorites = defaultdict(list, {int(k): v for k, v in loaded.items()})
     except: user_favorites = defaultdict(list)
     try:
         with open(FILES['user_history'], 'r', encoding='utf-8') as f:
-            user_history = {int(k): v for k, v in json.load(f).items()}
+            loaded = json.load(f)
+            user_history = defaultdict(list, {int(k): v for k, v in loaded.items()})
     except: user_history = defaultdict(list)
     try:
         with open(FILES['popular_cache'], 'r', encoding='utf-8') as f:
@@ -75,7 +79,8 @@ def load_all_data():
     except: user_daily = {}
     try:
         with open(FILES['user_referrals'], 'r', encoding='utf-8') as f:
-            user_referrals = {int(k): v for k, v in json.load(f).items()}
+            loaded = json.load(f)
+            user_referrals = defaultdict(int, loaded)
     except: user_referrals = defaultdict(int)
     print(f"✅ Загружены данные: {len(user_data)} пользователей")
 
@@ -88,15 +93,15 @@ def save_all_data():
         with open(FILES['daily_stats'], 'w', encoding='utf-8') as f:
             json.dump(dict(daily_stats), f, ensure_ascii=False, indent=2)
         with open(FILES['user_favorites'], 'w', encoding='utf-8') as f:
-            json.dump(user_favorites, f, ensure_ascii=False, indent=2)
+            json.dump(dict(user_favorites), f, ensure_ascii=False, indent=2)
         with open(FILES['user_history'], 'w', encoding='utf-8') as f:
-            json.dump(user_history, f, ensure_ascii=False, indent=2)
+            json.dump({k: v for k, v in user_history.items()}, f, ensure_ascii=False, indent=2)
         with open(FILES['popular_cache'], 'w', encoding='utf-8') as f:
             json.dump(popular_cache, f, ensure_ascii=False, indent=2)
         with open(FILES['user_daily'], 'w', encoding='utf-8') as f:
             json.dump(user_daily, f, ensure_ascii=False, indent=2)
         with open(FILES['user_referrals'], 'w', encoding='utf-8') as f:
-            json.dump(user_referrals, f, ensure_ascii=False, indent=2)
+            json.dump(dict(user_referrals), f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
         print(f"❌ Ошибка сохранения: {e}")
@@ -204,7 +209,8 @@ async def check_daily_bonus(user_id):
 # ========== СТАТИСТИКА ==========
 def get_today_stats():
     today = datetime.now().strftime("%Y-%m-%d")
-    return daily_stats.get(today, 0), len(set([uid for uid, data in user_data.items() if data.get("last_active", "").startswith(today)]))
+    active_users = len([uid for uid, data in user_data.items() if data.get("last_active", "").startswith(today)])
+    return daily_stats.get(today, 0), active_users
 
 def generate_hourly_stats():
     hourly = defaultdict(int)
@@ -303,17 +309,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if args and args[0].isdigit() and int(args[0]) != user_id:
         referrer = int(args[0])
-        if referrer in user_data and user_id not in user_data.get(referrer, {}).get('referrals', []):
-            user_data[referrer]["requests"] = user_data[referrer].get("requests", 0) + REFERRAL_BONUS
-            user_referrals[referrer] += 1
-            await context.bot.send_message(referrer, f"🎉 Друг присоединился по твоей ссылке! +{REFERRAL_BONUS} запросов!")
+        if referrer in user_data:
+            if 'referrals' not in user_data[referrer]:
+                user_data[referrer]['referrals'] = []
+            if user_id not in user_data[referrer]['referrals']:
+                user_data[referrer]["requests"] = user_data[referrer].get("requests", 0) + REFERRAL_BONUS
+                user_data[referrer]['referrals'].append(user_id)
+                user_referrals[referrer] += 1
+                await context.bot.send_message(referrer, f"🎉 Друг присоединился по твоей ссылке! +{REFERRAL_BONUS} запросов!")
     
     if user_id not in user_data:
         user_data[user_id] = {"requests": 0, "name": name, "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     user_data[user_id]["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     is_sub = await check_sub(user_id, context)
-    remaining = FREE_REQUESTS_LIMIT - user_data[user_id]["requests"]
+    remaining = FREE_REQUESTS_LIMIT - user_data[user_id].get("requests", 0)
     status = "Безлимит ✨" if is_sub else f"Осталось {remaining}/{FREE_REQUESTS_LIMIT} 🎁"
     
     text = texts['welcome'].format(name=name, status=status, referrals=user_referrals.get(user_id, 0))
@@ -323,15 +333,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     query = update.message.text.strip()
     
+    # Проверяем режимы админа
     if context.user_data.get('editing_mode') or context.user_data.get('broadcast_mode'):
         return
     if not query:
         return
     
+    # Инициализируем пользователя, если его нет
     if user_id not in user_data:
-        user_data[user_id] = {"requests": 0}
+        user_data[user_id] = {"requests": 0, "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     user_data[user_id]["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
+    # Ежедневный бонус
     bonus_claimed, bonus = await check_daily_bonus(user_id)
     if bonus_claimed:
         await update.message.reply_text(texts['daily_bonus_text'].format(bonus=bonus))
@@ -340,13 +353,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     can, msg = can_use(user_id, is_sub)
     
     if not can:
-        remaining = FREE_REQUESTS_LIMIT - user_data[user_id]["requests"]
+        remaining = FREE_REQUESTS_LIMIT - user_data[user_id].get("requests", 0)
         await update.message.reply_text(texts['subscribe_prompt'].format(remaining=remaining, limit=FREE_REQUESTS_LIMIT), reply_markup=main_keyboard(user_id))
         return
     
     if not is_sub:
-        user_data[user_id]["requests"] += 1
+        user_data[user_id]["requests"] = user_data[user_id].get("requests", 0) + 1
     
+    # Сохраняем историю (теперь с defaultdict проблем не будет)
     user_history[user_id].insert(0, query)
     user_history[user_id] = user_history[user_id][:10]
     user_stats[query] += 1
@@ -373,18 +387,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     await query.answer()
     
-    # ========== ГЛАВНОЕ МЕНЮ (ИСПРАВЛЕНО) ==========
+    # ========== ГЛАВНОЕ МЕНЮ ==========
     if data == "menu":
         try:
-            # Пытаемся отредактировать текущее сообщение
             await query.edit_message_text(texts['main_menu_text'], reply_markup=main_keyboard(user_id))
         except:
-            # Если не получилось (гифка, фото, видео), удаляем старое и шлём новое
             try:
                 await query.delete_message()
                 await query.message.reply_text(texts['main_menu_text'], reply_markup=main_keyboard(user_id))
             except:
-                # Если и удалить не вышло, просто шлём новое
                 await query.message.reply_text(texts['main_menu_text'], reply_markup=main_keyboard(user_id))
         return
     
@@ -482,7 +493,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_sub = await check_sub(user_id, context)
         can, msg = can_use(user_id, is_sub)
         if not can:
-            remaining = FREE_REQUESTS_LIMIT - user_data[user_id]["requests"]
+            remaining = FREE_REQUESTS_LIMIT - user_data[user_id].get("requests", 0)
             await query.edit_message_text(texts['subscribe_prompt'].format(remaining=remaining, limit=FREE_REQUESTS_LIMIT), reply_markup=main_keyboard(user_id))
             return
         gif = get_random_gif(original_query)
